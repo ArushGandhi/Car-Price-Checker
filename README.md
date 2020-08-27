@@ -1,2 +1,2 @@
-# Rcode
-Price checker for BMW automobiles
+# code
+Price predictor for BMW automobiles
