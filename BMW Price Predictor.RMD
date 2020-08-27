@@ -1,0 +1,843 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+BUSINESS UNDERSTANDING
+
+The objective of this analysis is to be able to build effective models to predict price of a used vehicle with features for each vehicle, assuming that we have a 2nd hand car dealership company
+
+
+Libraries
+```{r}
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(dummies)
+library(fastDummies)
+library(psych)
+library(PerformanceAnalytics)
+library(DMwR)
+library(rpart)
+library(rpart.plot)
+library(broom)
+library(gridExtra)
+library(class)
+library(caret)
+library(FNN)
+library(neuralnet)
+library(kernlab)
+library(MASS)
+
+```
+
+Setting Directory
+```{r}
+
+#setwd("C:/Users/arush/Desktop/Fall 19/DA5030/Project")
+```
+
+DATA UNDERSTANDING
+
+Loading and displaying the dataset
+```{r}
+data <- read.csv("bmw.csv",stringsAsFactors = T, header = T)
+colnames(data)
+str(data)
+
+#It can be seen that there are 18 variables, 3 of them being continuous(including the target variable-'price') and 15 being categorical variables
+```
+
+Exploratry Data Analysis
+```{r}
+#Exploring the continuous variables using histograms
+
+#Histogram for Mileage
+x <- data$mileage          
+h<-hist(x, breaks=10, col="magenta", xlab="Mileage values",main="Histogram for Mileage")
+xfit<-seq(min(x),max(x),length=214)
+yfit<-dnorm(xfit,mean=mean(x),sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="blue", lwd=2)
+
+#Histogram for Mileage
+x <- data$engine_power          
+h<-hist(x, breaks=10, col="blue", xlab="Engine Power values",main="Histogram for Engine Power")
+xfit<-seq(min(x),max(x),length=214)
+yfit<-dnorm(xfit,mean=mean(x),sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="magenta", lwd=2)
+
+#Histogram for Mileage
+x <- data$price          
+h<-hist(x, breaks=10, col="red", xlab="Price values",main="Histogram for Price")
+xfit<-seq(min(x),max(x),length=214)
+yfit<-dnorm(xfit,mean=mean(x),sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="blue", lwd=2)
+```
+
+```{r}
+#Exploring the categorical variables using bar plots
+plot(data$model_key, main = "Model Key")
+plot(data$registration_date, main = "Registration Date")
+plot(data$fuel, main = "Fuel")
+plot(data$paint_color, main = "Paint color")
+plot(data$car_type, main = "Car Type")
+barplot(table(data$feature_1), main = "Feature 1")
+barplot(table(data$feature_2), main = "Feature 2")
+barplot(table(data$feature_3), main = "Feature 3")
+barplot(table(data$feature_4), main = "Feature 4")
+barplot(table(data$feature_5), main = "Feature 5")
+barplot(table(data$feature_6), main = "Feature 6")
+barplot(table(data$feature_7), main = "Feature 7")
+barplot(table(data$feature_8), main = "Feature 8")
+plot(data$sold_at, main = "Sold At")
+
+```
+
+DATA PREPARATION
+
+Outliers
+```{r}
+#Checking for outliers in the continuous variables
+#Outliers are identified by checking if differnce of the datapoint in a variable is greater than 3 standard deviations from its mean value.
+#There are many methods to deal with outliers, these include- 1)imputing the outlier values with mean, median or mode. 2)Removing them completely, 3)Replacing them wtih NA and then predicting them by making them the dependent variable.
+
+#To see if outliers exist in the 3 continuos variables using boxplots
+boxplot(data$mileage, horizontal = T)
+boxplot(data$engine_power, horizontal = T)
+boxplot(data$price, horizontal = T)
+```
+
+```{r}
+#Displaying outlier values
+
+outliers <- data
+
+#For Mileage
+data.frame(mileage=outliers$mileage[which((abs(outliers$mileage-mean(outliers$mileage))/sd(outliers$mileage))>3.0)])
+
+#For Engine Power
+data.frame(engine_power=outliers$engine_power[which((abs(outliers$engine_power-mean(outliers$engine_power))/sd(outliers$engine_power))>3.0)])
+
+#For Price
+data.frame(price=outliers$price[which((abs(outliers$price-mean(outliers$price))/sd(outliers$price))>3.0)])
+
+```
+
+```{r}
+#Dealing with Outlier values by removing them
+
+outlier_removed <- outliers%>%
+  filter((abs(mileage-mean(mileage))/sd(mileage))<=3.0)%>%
+  filter((abs(engine_power-mean(engine_power))/sd(engine_power))<=3.0)%>%
+  filter((abs(price-mean(price))/sd(price))<=3.0)
+str(outlier_removed)
+
+```
+
+Correlation/Collinearity Analysis
+```{r}
+data1 <- outlier_removed
+
+#Finding correlation between the continuous variables
+cor(data1[c("price","engine_power","mileage")])
+
+#Visually displaying the correlation
+chart.Correlation(data1[c("mileage","engine_power","price")], histogram=TRUE, pch=19)
+
+#Correlation coefficient is a number which lies between -1 and 1 and indicates a relation between 2 varibales such that if the number is closer to -1 or +1, it depicts a strong negative or positive correlation between those variables respectively as this linear relation becomes lesser as the value moves towards 0.
+
+#In this dataset, there is a correlation coefficient of -0.39 between price and mileage and 0.63 between price and engine_power
+
+```
+
+
+Data Imputation
+```{r}
+#Imputing Outlier values in continuous variables with values predicted through kNN
+
+##FOR MILEAGE, ENGINE POWER and PRICE
+outlier_knn <- data
+#Replacing the outlier values in mileage with NA
+outlier_knn$mileage[c(57,101,474,558,583,932,1004,1150,1279,1514,1522,1559,1574,1689,1724,1771,1818,1935,2174,2185,2351,2406,2495,2642,2786,2830,2863,2913,2972,3129,3167,3193,3199,3298,3360,3409,3421,3445,3555,3576,3698,3733,3995,4374,4432,4725)]<- "NA"
+outlier_knn$mileage <- as.integer(outlier_knn$mileage)
+
+#Replacing the outlier values in engine_power with NA
+outlier_knn$engine_power[c(2,18,38,63,68,73,74,94,140,955,968,971,976,1699,2541,2675,2724,2927,2945,3084,3093,3096,3242,3405,3598,3602,3766,3830,3975,3987,4054,4147,4197,4220,4266,4272,4340,4354,4371,4458,4558,4590,4632,4672,4683,4725,4727,4750)]<-"NA"
+outlier_knn$engine_power <- as.integer(outlier_knn$engine_power)
+
+#Replacing the outlier values in price with NA
+outlier_knn$price[c(2,68,69,73,91,116,2679,2681,2776,2825,2939,2945,3070,3093,3293,3321,3346,3589,3596,3742,3825,3830,3919,3959,4019,4054,4067,4093,4103,4110,4111,4117,4132,4141,4147,4152,4195,4215,4220,4234,4236,4266,4272,4283,4318,4340,4354,4373,4440,4447,4458,4481,4509,4514,4552,4599,4615,4622,4632,4642,4666,4667,4672,4685,4729,4732,4744,4750,4754,4783,4796)]<-"NA"
+outlier_knn$price <- as.integer(outlier_knn$price)
+
+#Performing knn imputation
+outlier_knn1 <- knnImputation(outlier_knn, k = 10, scale = T, meth = "weighAvg", distData = NULL)  
+head(outlier_knn1)
+
+#These variables with imputed values will be used to check the accuracy against the accuracy from the variables from which the outlier values were removed
+
+```
+
+
+Data Transformation
+```{r}
+#From the histograms of continuous variables above, it can be seen that the distribution is not normally distributed, thus we can transform the data using log/square root/cube root transformation
+
+#Using data with outliers removed
+data2 <- outlier_removed
+
+#Histogram for Mileage
+data2$mileage <- (data2$mileage)^(1/1.25)
+x <- data2$mileage          
+h<-hist(x, breaks=10, col="magenta", xlab="Mileage values",main="Histogram for Mileage")
+xfit<-seq(min(x),max(x),length=214)
+yfit<-dnorm(xfit,mean=mean(x),sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="blue", lwd=2)
+
+#Histogram for Enginw Power
+data2$engine_power <- (data2$engine_power+50)
+x <- data2$engine_power          
+h<-hist(x, breaks=10, col="blue", xlab="Engine Power values",main="Histogram for Engine Power")
+xfit<-seq(min(x),max(x),length=214)
+yfit<-dnorm(xfit,mean=mean(x),sd=sd(x))
+yfit <- yfit*diff(h$mids[1:2])*length(x)
+lines(xfit, yfit, col="magenta", lwd=2)
+
+```
+
+
+FEATURE ENGINEERING
+```{r}
+##DUMMY CODING
+
+#There are categorical variables which need to be dummy coded (using the outlier removed and transformed dataset)
+#dummy_cols function is used from the fastDummies package to make new columns for the dummy coded variables
+
+data_DC <- data2
+
+#Variables to be dummy coded -  fuel, paint_color, car_type
+data_DC <- dummy_cols(data2, select_columns = c("fuel","paint_color","car_type"))
+
+```
+
+```{r}
+##Converting the logical variables, that are, features 1 to 8 to binary variables
+
+data_DC$feature_1 <- ifelse(data_DC$feature_1=="FALSE",0,1)
+data_DC$feature_2 <- ifelse(data_DC$feature_2=="FALSE",0,1)
+data_DC$feature_3 <- ifelse(data_DC$feature_3=="FALSE",0,1)
+data_DC$feature_4 <- ifelse(data_DC$feature_4=="FALSE",0,1)
+data_DC$feature_5 <- ifelse(data_DC$feature_5=="FALSE",0,1)
+data_DC$feature_6 <- ifelse(data_DC$feature_6=="FALSE",0,1)
+data_DC$feature_7 <- ifelse(data_DC$feature_7=="FALSE",0,1)
+data_DC$feature_8 <- ifelse(data_DC$feature_8=="FALSE",0,1)
+head(data_DC)
+
+```
+
+```{r}
+##NEW DERIVED FEATURES
+
+#The 'model_key' feature would make more sense if converted to categories such as 1 series, 2 series,...7 series, i series, X series and Z series
+
+data_DC$model_key <- as.character(data_DC$model_key)
+data_DC$model_key <- substring(data_DC$model_key,1,1)    #retaining only the first character of each string
+for (i in 1:nrow(data_DC)) {
+data_DC$model_key[i] <- if(data_DC$model_key[i]=="1"){"1Series"}else if(data_DC$model_key[i]=="2"){"2Series"}else if(data_DC$model_key[i]=="3"){"3Series"}else if(data_DC$model_key[i]=="4"){"4Series"}else if(data_DC$model_key[i]=="5"){"5Series"}else if(data_DC$model_key[i]=="6"){"6Series"}else if(data_DC$model_key[i]=="7"){"7Series"}else if(data_DC$model_key[i]=="i"){"iSeries"}else if(data_DC$model_key[i]=="X"){"XSeries"}else if(data_DC$model_key[i]=="M"){"MSeries"}else if(data_DC$model_key[i]=="A"){"HybridSeries"}else{"ZSeries"}
+}
+
+#Dummy Coding the mode_key feature
+data_DC <- dummy_cols(data_DC, select_columns = "model_key")
+
+```
+
+```{r}
+#Adding a column which gives the difference between the registration date of the vehicle and date at which the vehicle was sold
+data_DC$Days <- as.Date(as.character(data_DC$sold_at), format="%Y-%m-%d")-
+                  as.Date(as.character(data_DC$registration_date), format="%Y-%m-%d")
+data_DC$Days <- as.integer(data_DC$Days)
+
+```
+
+
+```{r}
+#Converting the registration_date and sold_at features based to corresponding months
+data_DC$registration_date <- months(as.Date(data_DC$registration_date))
+data_DC$sold_at <- months(as.Date(data_DC$sold_at))
+
+#Dummy Coding the  registration_date and sold_at features
+data_DC <- dummy_cols(data_DC, select_columns = c("registration_date","sold_at"))
+
+head(data_DC)
+```
+
+
+```{r}
+#Removing unneeded variables
+
+#Removing the  categorical variables after dummy coding
+data_DC <- data_DC[,-c(1,2,5,6,7,8,18)]
+head(data_DC)
+```
+
+
+MODELLING
+
+PCA with Regression Tress
+```{r}
+#Dataset with dummy variables
+pcad <- data_DC
+
+#Dividing dataset into training and testing
+set.seed(10)
+ran <- runif(nrow(pcad))
+  pc <- pcad[order(ran),]
+s <- sample(2, nrow(pc), replace = T,prob = c(0.8,0.2))
+ptrain <- pc[s==1,]
+ptest <- pc[s==2,]
+
+
+PCA <- prcomp(ptrain[,-11], center = T, scale. = T)
+attributes(PCA)
+summary(PCA)
+
+#It can be noticed that the cumulative proportion of variance first reaches 1 at PC58 which means that it anyway requires close to 60 variables to explain most of the variance in the data
+
+#Standard Deviation
+std_dev <- PCA$sdev
+
+#compute variance
+vari <- std_dev^2
+
+#Proportion of variance
+propo <- vari/sum(vari)
+
+#Scree Plot
+plot(propo, xlab = "Principal Component",
+             ylab = "Proportion of Variance",
+             type = "b")
+
+#Storing the target variable(price) and PCA values in a separate data frame
+train.data <- data.frame(price=ptrain$price, PCA$x)
+
+#Since first 57 principal components are explaining over 99% of variance, we'll consider those PCs
+train.data <- train.data[,1:58]
+
+
+##Building a Regression Tree model to check PCA performance
+
+#Model
+rpart.model <- rpart(price ~ .,data = train.data, method = "anova")
+#Plotting the tree
+rpart.plot(rpart.model, type=3,fallen.leaves = T)
+
+#Test values into PCA
+test.data <- predict(PCA, newdata = ptest)
+test.data <- as.data.frame(test.data)
+
+#selecting the first 57 components
+test.data <- test.data[,1:58]
+
+#Predicting with the model built using test dataset
+rpart.prediction <- predict(rpart.model, test.data)
+
+#Function for MAD
+MAD <- function(actual,predicted){
+  mean(abs(actual-predicted))
+}
+
+#Function for MSE
+MSE <- function(actual,predicted){
+  mean((actual-predicted)^2)
+}
+
+#Function for RMSE
+RMSE <- function(actual,predicted){
+  sqrt(mean((actual-predicted)^2))
+}
+#MAD for PCA
+MAD_PCA <- MAD(ptest$price,rpart.prediction)
+MSE_PCA <- MSE(ptest$price,rpart.prediction)
+RMSE_PCA <- RMSE(ptest$price,rpart.prediction)
+paste("MAD = ", MAD_PCA)
+paste("MSE = ", MSE_PCA)
+paste("RMSE = ", RMSE_PCA)
+
+```
+
+Normalising features using Min-max 
+```{r}
+norma <- data_DC
+normalize <- function(x) {
+    return((x - min(x)) / (max(x) - min(x)))
+}
+
+#Normalizing all the variables
+DATA <- as.data.frame(lapply(norma[,-11], normalize))
+DATA <- cbind(DATA,data_DC[11])
+summary(DATA)
+```
+
+
+
+MODEL CONSTRUCTION
+
+```{r}
+##TRAINING AND TESTING
+#Splitting dataset into training and testing randomly, with 80% going to training and the rest to testing
+set.seed(10)
+  rand <- runif(nrow(DATA))   #Randomising the rows of the dataset
+  new <- DATA[order(rand),]
+  splitting <- sample(2,nrow(new),replace = T,prob = c(0.80,.20))   #splitting into 2 sets
+  training <- new[splitting==1,]
+  testing <- new[splitting == 2,]
+```
+
+MODEL 1- Linear Regression
+```{r}
+#Using all variables
+model1 <- lm(price~.,data = training)
+s <- summary(model1)
+s
+R2.1 <- s$adj.r.squared   #R squared value is a measure of how close the data are to the fitted regression line. So the higher this value the better
+FStat.1 <- s$fstatistic   #F statistic - It indicates whther a a model can be imoroved by making it more complex by adding more variables
+paste("Rsquared = ", R2.1)
+paste("FStat = ", FStat.1)
+
+#Adjusted R-squared = 0.7629
+#Residual standard error = 3419
+
+#It can be seen that there are quite a few features which are not statistically significant(since, p>0.05) and a few features which had no values in the training set because of the splitting.
+#Let's remove the features with NA
+```
+
+
+Tuning Model 1 by removing month variables
+```{r}
+#It can be seen that the variables related to months (registration date and sold at), do not really have much significance. So let's try removing them.
+tune2 <- lm(price~.-fuel_petrol-paint_color_white-car_type_van-model_key_7Series-model_key_HybridSeries-registration_date_November-registration_date_December-registration_date_January-registration_date_February-registration_date_March-registration_date_April-registration_date_May-registration_date_June-registration_date_July-registration_date_August-registration_date_September-sold_at_September-sold_at_January-sold_at_February-sold_at_March-sold_at_April-sold_at_May-sold_at_June-sold_at_July-sold_at_August,data = training)
+s2 <- summary(tune2)
+s2
+R2.2 <- s2$adj.r.squared
+FStat.2 <- s2$fstatistic
+
+paste("Rsquared = ", R2.2)
+paste("FStat = ", FStat.2)
+##Adjusted R-squared =0.762
+#Reisdual standard error = 3426 (Higher than previous error)
+#F statisctic is higher than before  
+#There's not a lot of difference however
+#Let's go ahead with backward elimination with the highest p-value
+
+```
+
+```{r}
+#Backward Elimination
+
+tune3 <- lm(price ~ .-fuel_petrol-paint_color_white-car_type_van-model_key_7Series-model_key_HybridSeries-registration_date_November-registration_date_December-registration_date_January-registration_date_February-registration_date_March-registration_date_April-registration_date_May-registration_date_June-registration_date_July-registration_date_August-registration_date_September-registration_date_October-sold_at_September-sold_at_January-sold_at_February-sold_at_March-sold_at_April-sold_at_May-sold_at_June-sold_at_July-sold_at_August - paint_color_red - model_key_MSeries - paint_color_green - paint_color_orange - paint_color_black - paint_color_beige - paint_color_brown - model_key_4Series-car_type_estate-paint_color_grey-paint_color_silver-fuel_hybrid_petrol-fuel_electro, data = training)
+  s3 <- summary(tune3)
+  L <- s3$coefficients
+  a <- tidy(tune3)
+  b <- a[-1,]
+  c <- b[which.max(b$p.value),1]
+  c1 <- as.character(c)
+  c1                                #c1 is the next variable to remove based on max p value
+ s3
+  
+  R2.3 <- s3$adj.r.squared
+FStat.3 <- s3$fstatistic
+
+#Adjusted R-squared =0.7619 #Sill almost the same
+#Reisdual standard error = 3427  (Slightly Higher than previous error)
+#F statisctic is higher than before
+
+
+```
+
+
+```{r}
+
+fit <- lm(price~.,data=training)
+step <- stepAIC(fit, direction = "backward")
+step$anova
+
+finalmodel1 <- lm(price ~ mileage + engine_power + feature_1 + feature_2 + feature_3 +
+    feature_4 + feature_5 + feature_6 + feature_7 + feature_8 +
+    fuel_diesel + fuel_electro + fuel_hybrid_petrol + paint_color_blue +
+    car_type_convertible + car_type_coupe + car_type_hatchback +
+    car_type_sedan + car_type_subcompact + car_type_suv + model_key_1Series +
+    model_key_3Series + model_key_ZSeries + model_key_2Series +
+    model_key_6Series + model_key_5Series + model_key_XSeries +
+    model_key_iSeries + Days + registration_date_July + registration_date_December +
+    registration_date_May + registration_date_March + registration_date_January +
+    sold_at_March + sold_at_August, data = training)
+s4 <- summary(finalmodel1)
+
+R2.4 <- s4$adj.r.squared
+FStat.4 <- s4$fstatistic
+paste("Rsquared = ", R2.4)
+paste("FStat = ", FStat.4)
+
+
+#R-squared = 0.7635792 - Higher than all the previous values
+#F statistic = 333.7537  
+#Residual error = 3415
+
+#We'll finally keep these variables to test against the test dataset
+
+  a <- tidy(finalmodel1)
+  pred1 <- data.frame(predictions = 0)
+ 
+ for (i in 1:nrow(testing)) {
+pred1[i,1] <- a$estimate[1]+ (testing$mileage[i]*a$estimate[2])+ (testing$engine_power[i]*a$estimate[3])+ (testing$feature_1[i]*a$estimate[4])+ (testing$feature_2[i]*a$estimate[5])+ (testing$feature_3[i]*a$estimate[6])+ (testing$feature_4[i]*a$estimate[7])+ (testing$feature_5[i]*a$estimate[8])+ (testing$feature_6[i]*a$estimate[9])+ (testing$feature_7[i]*a$estimate[10])+ (testing$feature_8[i]*a$estimate[11])+ (testing$fuel_diesel[i]*a$estimate[12])+ (testing$fuel_electro[i]*a$estimate[13])+ (testing$fuel_hybrid_petrol[i]*a$estimate[14])+ (testing$paint_color_blue[i]*a$estimate[15])+ (testing$car_type_convertible[i]*a$estimate[16])+ (testing$car_type_coupe[i]*a$estimate[17])+ (testing$car_type_hatchback[i]*a$estimate[18])+ (testing$car_type_sedan[i]*a$estimate[19])+ (testing$car_type_subcompact[i]*a$estimate[20])+ (testing$car_type_suv[i]*a$estimate[21])+ (testing$model_key_1Series[i]*a$estimate[22])+ (testing$model_key_3Series[i]*a$estimate[23])+ (testing$model_key_ZSeries[i]*a$estimate[24])+ (testing$model_key_2Series[i]*a$estimate[25])+ (testing$model_key_6Series[i]*a$estimate[26])+ (testing$model_key_5Series[i]*a$estimate[27])+ (testing$model_key_XSeries[i]*a$estimate[28])+ (testing$model_key_iSeries[i]*a$estimate[29])+ (testing$Days[i]*a$estimate[30])+ (testing$registration_date_July[i]*a$estimate[31])+ (testing$registration_date_December[i]*a$estimate[32])+ (testing$registration_date_May[i]*a$estimate[33])+ (testing$registration_date_March[i]*a$estimate[34])+ (testing$registration_date_January[i]*a$estimate[35])+ (testing$sold_at_March[i]*a$estimate[36])+ (testing$sold_at_August[i]*a$estimate[37])
+ }
+
+p1 <- data.frame(actual=testing$price, predictions = pred1$predictions)
+head(p1)
+
+#Measure of performance
+MAD_LM <- MAD(p1$actual,p1$predictions)
+MSE_LM <- MSE(p1$actual,p1$predictions)
+RMSE_LM <- RMSE(p1$actual,p1$predictions)
+paste("MAD_LM = $", MAD_LM)
+paste("MSE_LM = $", MSE_LM)
+paste("RMSE_LM = $", RMSE_LM)
+
+```
+
+
+MODEL 2- k Nearest Neighbors
+```{r}
+#Building a Knn regression model with k = 4
+model2 <- knn.reg(training[,-67], testing[,-67], training$price,k=4)
+
+#MAD for initial iteration
+MAD_KNN <- MAD(testing$price,model2$pred)
+paste("MAD = $", MAD_KNN)
+
+```
+
+Tuning kNN algorithm using multiple k values and choosing the one giving the least error
+```{r}
+tuneknn <- data.frame(tune <- 0)
+
+for(i in 1:40){
+ m <-  knn.reg(training[,-67], testing[,-67], training$price,k=i)
+  tuneknn[i,1] <- MAD(testing$price , m$pred)
+}
+which.min(tuneknn$tune....0)
+tuneknn[which.min(tuneknn$tune....0),1]
+
+#It can be seen that k=22 gives the lease MAD($3398.519)
+ 
+```
+ 
+ Tuned KNN Model
+```{r}
+model2 <- knn.reg(training[,-67], testing[,-67], training$price,k=22)
+
+#Measure of performance
+MAD_KNN <- MAD(testing$price,model2$pred)
+MSE_KNN <- MSE(testing$price,model2$pred)
+RMSE_KNN <- RMSE(testing$price,model2$pred)
+paste("MAD_KNN = $", MAD_KNN)
+paste("MSE_KNN = $", MSE_KNN)
+paste("RMSE_KNN = $", RMSE_KNN)
+
+```
+
+
+
+Model 3- Support Vector Machines
+```{r}
+model3 <- ksvm(price ~ ., data = training, kernel = "vanilladot", type= "nu-svr")
+pred3 <- predict(model3, testing)
+
+#MAD for initial interation
+MAD_SVM <- MAD(testing$price,pred3)
+paste("MAD = $", MAD_SVM)
+
+```
+
+
+Tuning SVM Model by adjusting the kernel
+```{r}
+model3_RFB <- ksvm(price ~ ., data = training, kernel = "rbfdot", type= "nu-svr")
+pred3_RFB <- predict(model3_RFB, testing)
+
+#MAD for RFB interation
+MAD_SVM_RFB <- MAD(testing$price,pred3_RFB)
+paste("MAD_RFB = $", MAD_SVM_RFB)
+
+#OR
+
+model3_POLY <- ksvm(price ~ ., data = training, kernel = "polydot", type= "nu-svr")
+pred3_POLY <- predict(model3_POLY, testing)
+
+#MAD for PLOYDOT interation
+MAD_SVM_POLY <- MAD(testing$price,pred3_POLY)
+paste("MAD_POLY = $", MAD_SVM_POLY)
+
+#OR
+
+model3_ANOVA <- ksvm(price ~ ., data = training, kernel = "anovadot", type= "nu-svr")
+pred3_ANOVA <- predict(model3_ANOVA, testing)
+
+#MAD for ANOVA interation
+MAD_SVM_ANOVA <- MAD(testing$price,pred3_ANOVA)
+paste("MAD_ANOVA = $", MAD_SVM_ANOVA)
+
+
+# It can be seen that the least error out of these is for kernel Rfbdot, thus we'll build our tuned model using rfbdot
+```
+
+
+Tuned SVM Model
+```{r}
+model3 <- ksvm(price ~ ., data = training, kernel = "rbfdot", type= "nu-svr")
+pred3 <- predict(model3, testing)
+
+#Measure of performance
+MAD_SVM <- MAD(testing$price,pred3)
+MSE_SVM <- MSE(testing$price,pred3)
+RMSE_SVM <- RMSE(testing$price,pred3)
+paste("MAD_SVM = $", MAD_SVM)
+paste("MSE_SVM = $", MSE_SVM)
+paste("RMSE_SVM = $", RMSE_SVM)
+```
+
+
+K-Fold Cross Validation for KNN
+```{r}
+#Using 10 fold cross validation for building KNN model and checking the accuracy
+set.seed(10)
+folds_KNN <- createFolds(DATA$price, k = 10)
+
+cv_results_KNN <- lapply(folds_KNN, function(x) {
+    train <- DATA[-x, ]
+    test <- DATA[x, ]
+    cv_model <- knn.reg(train[,-67], test[,-67], train$price,k=22)
+    MAE <- MAD(test$price,cv_model$pred)
+    return(MAE)
+  })
+mean(unlist(cv_results_KNN))
+
+#Compared to KNN from holdout method, there is a slight improvement
+```
+
+
+
+K-Fold Cross Validation for SVM
+```{r}
+
+set.seed(10)
+folds_SVM <- createFolds(DATA$price, k = 10)
+
+cv_results_SVM <- lapply(folds_SVM, function(x) {
+    train <- DATA[-x, ]
+    test <- DATA[x, ]
+    cv_model <- ksvm(price ~ ., data = train, kernel = "rbfdot", type= "nu-svr")
+    cv_pred <- predict(cv_model, test)
+    MAE <- MAD(test$price,cv_pred)
+    return(MAE)
+  })
+mean(unlist(cv_results_SVM))
+
+#K Fold CV does not give a smaller error compared to Holdout method
+
+```
+
+
+
+Checking Linear Regression, KNN and SVM models built above using imputed data
+```{r}
+
+data3 <- outlier_knn1
+
+
+#Cleaning and preparing imputed data for model building
+
+
+#Variables to be dummy coded -  fuel, paint_color, car_type
+data_DC2 <- dummy_cols(data3, select_columns = c("fuel","paint_color","car_type"))
+
+#Dummy coding logical variables
+data_DC2$feature_1 <- ifelse(data_DC2$feature_1=="FALSE",0,1)
+data_DC2$feature_2 <- ifelse(data_DC2$feature_2=="FALSE",0,1)
+data_DC2$feature_3 <- ifelse(data_DC2$feature_3=="FALSE",0,1)
+data_DC2$feature_4 <- ifelse(data_DC2$feature_4=="FALSE",0,1)
+data_DC2$feature_5 <- ifelse(data_DC2$feature_5=="FALSE",0,1)
+data_DC2$feature_6 <- ifelse(data_DC2$feature_6=="FALSE",0,1)
+data_DC2$feature_7 <- ifelse(data_DC2$feature_7=="FALSE",0,1)
+data_DC2$feature_8 <- ifelse(data_DC2$feature_8=="FALSE",0,1)
+
+
+data_DC2$model_key <- as.character(data_DC2$model_key)
+data_DC2$model_key <- substring(data_DC2$model_key,1,1)    #retaining only the first character of each string
+#Breaking down model_key into categories of vehicle
+for (i in 1:nrow(data_DC2)) {
+data_DC2$model_key[i] <- if(data_DC2$model_key[i]=="1"){"1Series"}else if(data_DC2$model_key[i]=="2"){"2Series"}else if(data_DC2$model_key[i]=="3"){"3Series"}else if(data_DC2$model_key[i]=="4"){"4Series"}else if(data_DC2$model_key[i]=="5"){"5Series"}else if(data_DC2$model_key[i]=="6"){"6Series"}else if(data_DC2$model_key[i]=="7"){"7Series"}else if(data_DC2$model_key[i]=="i"){"iSeries"}else if(data_DC2$model_key[i]=="X"){"XSeries"}else if(data_DC2$model_key[i]=="M"){"MSeries"}else if(data_DC2$model_key[i]=="A"){"HybridSeries"}else{"ZSeries"}
+}
+
+#Dummy Coding the mode_key feature
+data_DC2 <- dummy_cols(data_DC2, select_columns = "model_key")
+
+data_DC2$Days <- as.Date(as.character(data_DC2$sold_at), format="%Y-%m-%d")-
+                  as.Date(as.character(data_DC2$registration_date), format="%Y-%m-%d")
+data_DC2$Days <- as.integer(data_DC2$Days)
+
+data_DC2$registration_date <- months(as.Date(data_DC2$registration_date))
+data_DC2$sold_at <- months(as.Date(data_DC2$sold_at))
+
+#Dummy Coding the  registration_date and sold_at features
+data_DC2 <- dummy_cols(data_DC2, select_columns = c("registration_date","sold_at"))
+
+data_DC2 <- data_DC2[,-c(1,2,5,6,7,8,18)]
+
+#Normalisation
+norma2 <- data_DC2
+
+#Normalizing all the variables except the target variable(price)
+DATA2 <- as.data.frame(lapply(norma2[,-11], normalize))
+DATA2 <- cbind(DATA2,data_DC2[11])
+summary(DATA2)
+
+```
+
+```{r}
+#Splitting the data
+set.seed(10)
+  rand2 <- runif(nrow(DATA2))   #Randomising the rows of the dataset
+  new2 <- DATA2[order(rand2),]
+  splitting2 <- sample(2,nrow(new2),replace = T,prob = c(0.80,.20))   #splitting into 2 sets
+  training2 <- new2[splitting2==1,]
+  testing2 <- new2[splitting2 == 2,]
+  head(training2)
+```
+
+
+```{r}
+#Linear Regression
+model1.1 <- lm(price~.,data = training2)
+s <- summary(model1.1)
+s$adj.r.squared
+s$fstatistic
+
+#Adjusted R-squared = 0.7749
+#Fstat =224.8045
+```
+
+```{r}
+#KNN
+model2.1 <- knn.reg(training2[,-67], testing2[,-67], training2$price,k=22)
+
+
+#Measure of performance
+MAD_KNN2 <- MAD(testing2$price , model2.1$pred)
+MSE_KNN2 <- MSE(testing2$price,model2.1$pred)
+RMSE_KNN2 <- RMSE(testing2$price,model2.1$pred)
+paste("MAD_KNN2 = $", MAD_KNN2)
+paste("MSE_KNN2 = $", MSE_KNN2)
+paste("RMSE_KNN2 = $", RMSE_KNN2)
+
+#The error using imputed data is higher compared to using data with outliers removed for KNN
+
+```
+
+```{r}
+#SVM
+model3.1 <- ksvm(price ~ ., data = training2, kernel = "rbfdot", type= "nu-svr")
+pred3.1 <- predict(model3.1, testing2)
+
+#Measure of performance
+MAD_SVM2 <- MAD(testing2$price,pred3.1)
+MSE_SVM2 <- MSE(testing2$price,pred3.1)
+RMSE_SVM2 <- RMSE(testing2$price,pred3.1)
+paste("MAD_SVM2 = $", MAD_SVM2)
+paste("MSE_SVM2 = $", MSE_SVM2)
+paste("RMSE_SVM2 = $", RMSE_SVM2)
+#The error using imputed data is higher compared to using data with outliers removed for SVM
+
+```
+
+
+ENSEMBLE MODEL
+```{r}
+#Models used- Linear Regression, KNN, SVM with outliers removed
+#Assigning weight of 2 to the model with least MAD and 1 to all others
+#In this case the model with the least error is SVM, thus giving it a weight of 2
+
+ensemble <- data.frame(Values=c(1:nrow(testing)))
+
+ensemble$Values <- ((2*pred3) + (p1$predictions) +(model2$pred))/(2+1+1)
+
+ #Measure of performance for Ensemble model
+MAD_EN <- MAD(testing$price,ensemble$Values)
+MSE_EN <- MSE(testing$price,ensemble$Values)
+RMSE_EN <- RMSE(testing$price,ensemble$Values)
+paste("MAD_EN = $", MAD_EN)
+paste("MSE_EN = $", MSE_EN)
+paste("RMSE_EN = $", RMSE_EN)
+
+
+
+```
+
+
+
+EVALUATION
+```{r}
+#Final Models are evaluated based on MSE, RMSE, MAD
+#Putting all final model values in one table
+
+Eval <- data.frame(Model =c("Linear Regression","KNN","SVM", "Ensemble"), MAD = c(MAD_LM, MAD_KNN, MAD_SVM, MAD_EN), MSE = c(MSE_LM,MSE_KNN,MSE_SVM,MSE_EN), RMSE = c(RMSE_LM,RMSE_KNN,RMSE_SVM,RMSE_EN))
+
+Eval
+
+#It can be seen that the least error is given by the SVM model
+```
+
+```{r}
+#Storing the measurements from all the models not used in a data frame
+Unused <- data.frame(Model =c("KNN(Imputed data)","SVM(Imputed data)", "Regression Tree_PCA"), MAD = c( MAD_KNN2, MAD_SVM2, MAD_PCA), MSE = c(MSE_KNN2,MSE_SVM2,MSE_PCA), RMSE = c(RMSE_KNN2,RMSE_SVM2,RMSE_PCA))
+
+Unused
+
+```
+
+```{r}
+#Storing the statistic values of all the linear regression models tried
+LinearReg <- data.frame(Model =c("LinearReg_All Variables","LinearReg_Months Removed","LinearReg_Manual Elimination","LinearReg_stepAIC"), Adjusted_RSquared =c(R2.1, R2.2, R2.3, R2.4), F_Statistic =c(FStat.1, FStat.2, FStat.3, FStat.4) )
+
+```
+
+
+DEPLOYMENT
+
+```{r}
+#Assuming that we got a quotation from  a customer interested in selling us his vehicle which have the specifications given as-
+
+
+#The customer comes in with a diesel BMW 750 model sedan with a mielage of 76349 miles, engine power of 400, features 1,4,5,6 present, black in color which is about 1000 days old, registed in Februrary and being sold in February.
+#We need to predict how much this car would be worth
+
+NEW <- data.frame(mileage= 76349, engine_power=400, feature_1=1, feature_2 = 0, feature_3= 0,feature_4 = 1 , feature_5= 1, feature_6= 1, feature_7 = 0, feature_8= 0 , price= 0, fuel_diesel =  1,fuel_electro= 0 , fuel_hybrid_petrol= 0, fuel_petrol= 0 ,paint_color_beige=  0 ,paint_color_black=1,paint_color_blue=0,paint_color_brown=0,paint_color_green=0,paint_color_grey=0,paint_color_orange=0,paint_color_red=0,paint_color_silver=0,paint_color_white=0,car_type_convertible=0,car_type_coupe=0,car_type_estate=0,car_type_hatchback=0,car_type_sedan=1,car_type_subcompact=0,car_type_suv=0,car_type_van=0,model_key_1Series=0,model_key_3Series=0,model_key_4Series=0,model_key_ZSeries=0,model_key_2Series=0,model_key_MSeries=0,model_key_6Series=0,model_key_5Series=0,model_key_XSeries=0,model_key_iSeries=0,model_key_7Series=1,model_key_HybridSeries=0,Days=1000,registration_date_February=1,registration_date_April=0,registration_date_July=0,registration_date_December=0,registration_date_May=0,registration_date_August=0,registration_date_June=0,registration_date_September=0,registration_date_March=0,registration_date_January=0,registration_date_October=0,registration_date_November=0,sold_at_January=0,sold_at_February=1,sold_at_April=0,sold_at_March=0,sold_at_May=0,sold_at_June=0,sold_at_July=0,sold_at_August=0,sold_at_September=0)
+
+#Normalizing these values
+
+#Using our best model, SVM
+
+newmodel_svm <- ksvm(price ~ ., data = training, kernel = "rbfdot", type= "nu-svr")
+NewPrice <- predict(newmodel_svm, NEW)
+
+paste("Price = $",NewPrice)
+
+
+
+```
